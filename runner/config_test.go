@@ -12,7 +12,7 @@ const (
 	cmd = "go build -o ./tmp/main ."
 )
 
-func getWindowsConfig() config {
+func getWindowsConfig() Config {
 	build := cfgBuild{
 		Cmd:          "go build -o ./tmp/main .",
 		Bin:          "./tmp/main",
@@ -28,7 +28,7 @@ func getWindowsConfig() config {
 		build.Cmd = cmd
 	}
 
-	return config{
+	return Config{
 		Root:        ".",
 		TmpDir:      "tmp",
 		TestDataDir: "testdata",
@@ -93,7 +93,7 @@ func TestDefaultPathConfig(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			_ = os.Setenv(airWd, tt.path)
+			t.Setenv(airWd, tt.path)
 			c, err := defaultPathConfig()
 			if err != nil {
 				t.Fatalf("Should not be fail: %s.", err)
@@ -110,12 +110,12 @@ func TestReadConfByName(t *testing.T) {
 	_ = os.Unsetenv(airWd)
 	config, _ := readConfByName(dftTOML)
 	if config != nil {
-		t.Fatalf("expect config is nil,but get a not nil config")
+		t.Fatalf("expect Config is nil,but get a not nil Config")
 	}
 }
 
 func TestConfPreprocess(t *testing.T) {
-	_ = os.Setenv(airWd, "_testdata/toml")
+	t.Setenv(airWd, "_testdata/toml")
 	df := defaultConfig()
 	err := df.preprocess()
 	if err != nil {

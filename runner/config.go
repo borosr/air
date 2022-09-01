@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"time"
@@ -20,7 +21,8 @@ const (
 	airWd   = "air_wd"
 )
 
-type config struct {
+// Config is the main configuration structure for Air.
+type Config struct {
 	Root        string    `toml:"root"`
 	TmpDir      string    `toml:"tmp_dir"`
 	TestDataDir string    `toml:"testdata_dir"`
@@ -85,7 +87,23 @@ type cfgScreen struct {
 	ClearOnRebuild bool `toml:"clear_on_rebuild"`
 }
 
-func initConfig(path string) (cfg *config, err error) {
+type sliceTransformer struct {
+}
+
+func (t sliceTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
+	if typ.Kind() == reflect.Slice {
+		return func(dst, src reflect.Value) error {
+			if !src.IsZero() {
+				dst.Set(src)
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// InitConfig initializes the configuration.
+func InitConfig(path string) (cfg *Config, err error) {
 	if path == "" {
 		cfg, err = defaultPathConfig()
 		if err != nil {
@@ -97,12 +115,22 @@ func initConfig(path string) (cfg *config, err error) {
 			return nil, err
 		}
 	}
-	err = mergo.Merge(cfg, defaultConfig())
+	config := defaultConfig()
+	// get addr
+	ret := &config
+	err = mergo.Merge(ret, cfg, func(config *mergo.Config) {
+		// mergo.Merge will overwrite the fields if it is Empty
+		// So need use this to avoid that none-zero slice will be overwritten.
+		// https://github.com/imdario/mergo#transformers
+		config.Transformers = sliceTransformer{}
+		config.Overwrite = true
+	})
 	if err != nil {
 		return nil, err
 	}
-	err = cfg.preprocess()
-	return cfg, err
+
+	err = ret.preprocess()
+	return ret, err
 }
 
 func writeDefaultConfig() {
@@ -140,7 +168,7 @@ func writeDefaultConfig() {
 	fmt.Printf("%s file created to the current directory with the default settings\n", dftTOML)
 }
 
-func defaultPathConfig() (*config, error) {
+func defaultPathConfig() (*Config, error) {
 	// when path is blank, first find `.air.toml`, `.air.conf` in `air_wd` and current working directory, if not found, use defaults
 	for _, name := range []string{dftTOML, dftConf} {
 		cfg, err := readConfByName(name)
@@ -156,7 +184,7 @@ func defaultPathConfig() (*config, error) {
 	return &dftCfg, nil
 }
 
-func readConfByName(name string) (*config, error) {
+func readConfByName(name string) (*Config, error) {
 	var path string
 	if wd := os.Getenv(airWd); wd != "" {
 		path = filepath.Join(wd, name)
@@ -171,13 +199,16 @@ func readConfByName(name string) (*config, error) {
 	return cfg, err
 }
 
-func defaultConfig() config {
+func defaultConfig() Config {
 	build := cfgBuild{
 		Cmd:          "go build -o ./tmp/main .",
 		Bin:          "./tmp/main",
 		Log:          "build-errors.log",
 		IncludeExt:   []string{"go", "tpl", "tmpl", "html"},
+		IncludeDir:   []string{},
+		ExcludeFile:  []string{},
 		ExcludeDir:   []string{"assets", "tmp", "vendor", "testdata"},
+		ArgsBin:      []string{},
 		ExcludeRegex: []string{"_test.go"},
 		Delay:        1000,
 		StopOnError:  true,
@@ -198,7 +229,7 @@ func defaultConfig() config {
 	misc := cfgMisc{
 		CleanOnExit: false,
 	}
-	return config{
+	return Config{
 		Root:        ".",
 		TmpDir:      "tmp",
 		TestDataDir: "testdata",
@@ -209,13 +240,13 @@ func defaultConfig() config {
 	}
 }
 
-func readConfig(path string) (*config, error) {
+func readConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg := new(config)
+	cfg := new(Config)
 	if err = toml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
@@ -223,7 +254,7 @@ func readConfig(path string) (*config, error) {
 	return cfg, nil
 }
 
-func readConfigOrDefault(path string) (*config, error) {
+func readConfigOrDefault(path string) (*Config, error) {
 	dftCfg := defaultConfig()
 	cfg, err := readConfig(path)
 	if err != nil {
@@ -233,7 +264,7 @@ func readConfigOrDefault(path string) (*config, error) {
 	return cfg, nil
 }
 
-func (c *config) preprocess() error {
+func (c *Config) preprocess() error {
 	var err error
 	cwd := os.Getenv(airWd)
 	if cwd != "" {
@@ -275,7 +306,7 @@ func (c *config) preprocess() error {
 	return err
 }
 
-func (c *config) colorInfo() map[string]string {
+func (c *Config) colorInfo() map[string]string {
 	return map[string]string{
 		"main":    c.Color.Main,
 		"build":   c.Color.Build,
@@ -284,30 +315,40 @@ func (c *config) colorInfo() map[string]string {
 	}
 }
 
-func (c *config) buildLogPath() string {
+func (c *Config) buildLogPath() string {
 	return filepath.Join(c.tmpPath(), c.Build.Log)
 }
 
-func (c *config) buildDelay() time.Duration {
+func (c *Config) buildDelay() time.Duration {
 	return time.Duration(c.Build.Delay) * time.Millisecond
 }
 
-func (c *config) binPath() string {
+func (c *Config) binPath() string {
 	return filepath.Join(c.Root, c.Build.Bin)
 }
 
-func (c *config) tmpPath() string {
+func (c *Config) tmpPath() string {
 	return filepath.Join(c.Root, c.TmpDir)
 }
 
-func (c *config) TestDataPath() string {
+func (c *Config) testDataPath() string {
 	return filepath.Join(c.Root, c.TestDataDir)
 }
 
-func (c *config) rel(path string) string {
+func (c *Config) rel(path string) string {
 	s, err := filepath.Rel(c.Root, path)
 	if err != nil {
 		return ""
 	}
 	return s
+}
+
+// WithArgs returns a new config with the given arguments added to the configuration.
+func (c *Config) WithArgs(args map[string]TomlInfo) {
+	for _, value := range args {
+		if value.Value != nil && *value.Value != unsetDefault {
+			v := reflect.ValueOf(c)
+			setValue2Struct(v, value.fieldPath, *value.Value)
+		}
+	}
 }
